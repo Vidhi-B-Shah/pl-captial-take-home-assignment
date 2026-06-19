@@ -61,7 +61,7 @@ pl-capital/
 │   └── evaluator.py              # Ground truth evaluation script
 ├── data/                         # 9 CSV files (portfolio data)
 ├── database_schema.sql           # Table definitions & indices
-└── ground_truth_dataset.json     # 10 evaluation Q&A pairs
+└── ground_truth_dataset.json     # 12 evaluation Q&A pairs (incl. 2 hybrid)
 ```
 
 ---
@@ -127,6 +127,13 @@ pl-capital/
 **Complex queries** : Queries that can result into complex SQL queries, but are still handled nicely by the agent.
 
 ![Complex Queries](docs/screenshots/6_complex_queries.png)
+
+**Hybrid queries** : Questions that require both tools working together sequentially. For example, "What are the sector exposures for the portfolio with the highest AUM?" first calls the SQL tool to identify the portfolio, then passes that result to the exposure calculator. The agent trace shows each step separately.
+
+![Hybrid Queries](docs/screenshots/7_1_hybrid_queries.png)
+
+![Hybrid Queries Agent Trace](docs/screenshots/7_2_hybrid_queries_agent_trace.png)
+
 ---
 
 ## Note
