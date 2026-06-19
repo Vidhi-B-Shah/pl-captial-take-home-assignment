@@ -30,3 +30,7 @@ FORBIDDEN_SQL_PATTERNS: re.Pattern[str] = re.compile(
 )
 
 SQL_RESULT_LIMIT: int = 100
+
+### Agent configuration
+
+AGENT_NAME: str = "portfolio_agent"
