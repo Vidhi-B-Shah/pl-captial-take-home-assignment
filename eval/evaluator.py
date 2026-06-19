@@ -31,9 +31,7 @@ GROUND_TRUTH_PATH = PROJECT_ROOT / "ground_truth_dataset.json"
 FLOAT_TOLERANCE = 0.01
 
 
-# ---------------------------------------------------------------------------
-# Comparison helpers
-# ---------------------------------------------------------------------------
+### COMPARISON HELPERS
 
 def _normalise_value(val: Any) -> Any:
     """Coerce a value for comparison: round floats, lowercase strings."""
@@ -134,9 +132,7 @@ def _compare_table(
     return set(exp_projected) == set(act_projected)
 
 
-# ---------------------------------------------------------------------------
-# Per-type evaluators
-# ---------------------------------------------------------------------------
+### PER-TYPE EVALUATORS
 
 def _evaluate_text2sql(
     question: dict[str, Any],
@@ -210,9 +206,7 @@ def _evaluate_exposure(
     return True, f"Correct tool, {len(percentages)} sectors, sum={total:.1f}%"
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+### MAIN
 
 async def main() -> int:
     """Run all ground truth questions and print a scorecard."""
