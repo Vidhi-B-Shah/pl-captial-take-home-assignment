@@ -1,0 +1,281 @@
+"""CLI evaluation script that tests the agent against ground truth questions.
+
+Run independently from Streamlit::
+
+    python -m eval.evaluator
+"""
+
+import asyncio
+import json
+import logging
+import math
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
+
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+from db.connection import DatabaseManager
+from db.loader import initialize_database
+from agent.portfolio_agent import AgentManager
+from agent.models import AgentResponse
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+GROUND_TRUTH_PATH = PROJECT_ROOT / "ground_truth_dataset.json"
+
+FLOAT_TOLERANCE = 0.01
+
+
+# ---------------------------------------------------------------------------
+# Comparison helpers
+# ---------------------------------------------------------------------------
+
+def _normalise_value(val: Any) -> Any:
+    """Coerce a value for comparison: round floats, lowercase strings."""
+    if isinstance(val, float):
+        return round(val, 2)
+    if isinstance(val, str):
+        return val.strip()
+    return val
+
+
+def _rows_to_tuples(rows: list[dict[str, Any]]) -> set[tuple[Any, ...]]:
+    """Convert list-of-dicts rows into a set of normalised tuples."""
+    return {
+        tuple(_normalise_value(v) for v in row.values())
+        for row in rows
+    }
+
+
+def _values_close(expected: Any, actual: Any) -> bool:
+    """Check if two scalar values are close enough."""
+    if isinstance(expected, (int, float)) and isinstance(actual, (int, float)):
+        if expected == 0 and actual == 0:
+            return True
+        return math.isclose(expected, actual, rel_tol=FLOAT_TOLERANCE)
+    return str(expected).strip().lower() == str(actual).strip().lower()
+
+
+def _compare_single_value(
+    expected_rows: list[dict[str, Any]], actual_rows: list[dict[str, Any]]
+) -> bool:
+    if not expected_rows or not actual_rows:
+        return False
+    exp_val = list(expected_rows[0].values())[0]
+    act_val = list(actual_rows[0].values())[0]
+    return _values_close(exp_val, act_val)
+
+
+def _compare_list(
+    expected_rows: list[dict[str, Any]], actual_rows: list[dict[str, Any]]
+) -> bool:
+    exp_set = {str(_normalise_value(list(r.values())[0])).lower() for r in expected_rows}
+    act_set = {str(_normalise_value(list(r.values())[0])).lower() for r in actual_rows}
+    return exp_set == act_set
+
+
+def _find_common_columns(
+    expected_rows: list[dict[str, Any]], actual_rows: list[dict[str, Any]]
+) -> list[str]:
+    """Find columns whose normalised names appear in both result sets."""
+    def _norm_col(c: str) -> str:
+        return c.strip().lower().replace(" ", "_")
+
+    exp_cols = {_norm_col(c): c for c in expected_rows[0]}
+    act_cols = {_norm_col(c): c for c in actual_rows[0]}
+    common_norm = set(exp_cols) & set(act_cols)
+    if common_norm:
+        return [(exp_cols[n], act_cols[n]) for n in common_norm]
+    return []
+
+
+def _compare_table(
+    expected_rows: list[dict[str, Any]],
+    actual_rows: list[dict[str, Any]],
+    has_order: bool = False,
+) -> bool:
+    if len(expected_rows) != len(actual_rows):
+        return False
+
+    common = _find_common_columns(expected_rows, actual_rows)
+
+    if common:
+        exp_projected = [
+            tuple(_normalise_value(r[ec]) for ec, _ in common)
+            for r in expected_rows
+        ]
+        act_projected = [
+            tuple(_normalise_value(r[ac]) for _, ac in common)
+            for r in actual_rows
+        ]
+    else:
+        exp_projected = [
+            tuple(_normalise_value(v) for v in r.values())
+            for r in expected_rows
+        ]
+        act_projected = [
+            tuple(_normalise_value(v) for v in r.values())
+            for r in actual_rows
+        ]
+
+    if has_order:
+        for exp_t, act_t in zip(exp_projected, act_projected):
+            if len(exp_t) != len(act_t):
+                return False
+            if not all(_values_close(e, a) for e, a in zip(exp_t, act_t)):
+                return False
+        return True
+
+    return set(exp_projected) == set(act_projected)
+
+
+# ---------------------------------------------------------------------------
+# Per-type evaluators
+# ---------------------------------------------------------------------------
+
+def _evaluate_text2sql(
+    question: dict[str, Any],
+    response: AgentResponse,
+    db: DatabaseManager,
+) -> tuple[bool, str]:
+    """Compare agent SQL results against ground truth SQL results."""
+    gt = question["ground_truth"]
+    gt_sql = gt["sql_query"]
+    result_type = gt["expected_result_type"]
+
+    if response.tool_used != "query_database":
+        return False, f"Wrong tool: expected query_database, got {response.tool_used}"
+
+    try:
+        expected_rows = db.execute_query(gt_sql)
+    except Exception as exc:
+        return False, f"Ground truth SQL failed: {exc}"
+
+    agent_sql = response.sql_query
+    if not agent_sql:
+        return False, "No SQL was generated by the agent"
+
+    try:
+        actual_rows = db.execute_query(agent_sql)
+    except Exception as exc:
+        return False, f"Agent SQL failed: {exc}"
+
+    has_order = "ORDER BY" in gt_sql.upper()
+
+    if result_type == "single_value":
+        passed = _compare_single_value(expected_rows, actual_rows)
+    elif result_type == "list":
+        passed = _compare_list(expected_rows, actual_rows)
+    elif result_type == "table":
+        passed = _compare_table(expected_rows, actual_rows, has_order=has_order)
+    else:
+        return False, f"Unknown result type: {result_type}"
+
+    if passed:
+        return True, "Results match"
+
+    return False, (
+        f"Result mismatch\n"
+        f"  Expected ({len(expected_rows)} rows): {expected_rows[:3]}\n"
+        f"  Actual   ({len(actual_rows)} rows): {actual_rows[:3]}"
+    )
+
+
+def _evaluate_exposure(
+    question: dict[str, Any],
+    response: AgentResponse,
+) -> tuple[bool, str]:
+    """Verify the exposure tool was called and output looks reasonable."""
+    if response.tool_used != "calculate_sector_exposure":
+        return False, f"Wrong tool: expected calculate_sector_exposure, got {response.tool_used}"
+
+    gt_portfolio = question["ground_truth"]["parameters"]["portfolio_name"]
+    answer = response.answer.lower()
+    if gt_portfolio.lower() not in answer:
+        return False, f"Portfolio name '{gt_portfolio}' not found in response"
+
+    percentages = re.findall(r"(\d+\.?\d*)\s*%", response.answer)
+    if not percentages:
+        return False, "No percentage values found in response"
+
+    total = sum(float(p) for p in percentages)
+    if not math.isclose(total, 100.0, abs_tol=1.0):
+        return False, f"Percentages sum to {total:.2f}%, expected ~100%"
+
+    return True, f"Correct tool, {len(percentages)} sectors, sum={total:.1f}%"
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+async def main() -> int:
+    """Run all ground truth questions and print a scorecard."""
+    db = DatabaseManager()
+    initialize_database(db)
+    mgr = AgentManager()
+
+    with open(GROUND_TRUTH_PATH, encoding="utf-8") as f:
+        dataset = json.load(f)
+
+    questions = dataset["questions"]
+    results: list[tuple[int, str, bool, str]] = []
+
+    for q in questions:
+        qid = q["id"]
+        qtype = q["type"]
+        text = q["question"]
+        difficulty = q["difficulty"]
+
+        logger.info("Evaluating Q%d (%s/%s): %s", qid, difficulty, qtype, text)
+
+        try:
+            response = await mgr.run(text, "evaluator", f"eval_q{qid}")
+
+            if qtype == "text2sql":
+                passed, detail = _evaluate_text2sql(q, response, db)
+            elif qtype == "exposure_calculator":
+                passed, detail = _evaluate_exposure(q, response)
+            else:
+                passed, detail = False, f"Unknown question type: {qtype}"
+
+        except Exception as exc:
+            passed, detail = False, f"Exception: {exc}"
+
+        results.append((qid, text, passed, detail))
+
+    # ---- Scorecard --------------------------------------------------------
+
+    total = len(results)
+    passed_count = sum(1 for _, _, p, _ in results if p)
+
+    print("\n" + "=" * 55)
+    print("  Evaluation Results")
+    print("=" * 55)
+    print(f"  Total: {total} | Passed: {passed_count} | Failed: {total - passed_count}")
+    print(f"  Accuracy: {passed_count / total * 100:.1f}%")
+    print("-" * 55)
+
+    for qid, text, passed, detail in results:
+        status = "PASS" if passed else "FAIL"
+        icon = "✅" if passed else "❌"
+        short_text = text[:50] + "..." if len(text) > 50 else text
+        print(f"  {icon} Q{qid}: {short_text} ({status})")
+        if not passed:
+            for line in detail.split("\n"):
+                print(f"       {line}")
+
+    print("=" * 55 + "\n")
+
+    db.close()
+    return 0 if passed_count == total else 1
+
+
+if __name__ == "__main__":
+    exit_code = asyncio.run(main())
+    sys.exit(exit_code)
