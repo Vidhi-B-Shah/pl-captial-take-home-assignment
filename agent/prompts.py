@@ -176,6 +176,16 @@ RULES:
 3. Handle NULLs appropriately with COALESCE or IS NOT NULL where relevant.
 4. Use ROUND() for calculated percentages or averages.
 5. Always match string values with exact casing as listed above.
+6. When asked about items in a specific category (e.g. "Technology sector holdings"),
+   only include rows WHERE that category actually applies. Do not include rows
+   with zero values — filter them out with a WHERE or HAVING clause.
+7. When asked for "diversification metrics", calculate them from the data itself
+   (e.g. sector_count, total_holdings, diversification_ratio = sector_count / total_holdings).
+   Do NOT join with the risk_metrics table unless risk-specific columns are requested.
+8. When counting distinct sectors for a portfolio, only count sectors from
+   equity holdings (asset_type = 'Stock').
+9. Use CTEs (WITH clauses) for complex multi-step queries to improve readability.
+10. Always alias calculated columns with descriptive names using AS.
 
 QUESTION: {question}
 """

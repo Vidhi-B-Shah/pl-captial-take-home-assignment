@@ -1,9 +1,11 @@
 """Streamlit chat interface for the Portfolio Analytics Agent."""
 
 import asyncio
+import re
 import uuid
 import logging
 
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -69,6 +71,20 @@ for col, question in zip(cols, EXAMPLE_QUESTIONS):
 
 ### CHAT HISTORY
 
+def _render_exposure_chart(answer: str) -> None:
+    """Render a bar chart if the answer contains sector exposure percentages."""
+    lines = answer.strip().split("\n")
+    sectors, pcts = [], []
+    for line in lines:
+        match = re.match(r"\s*(.+?):\s*([\d.]+)\s*%", line)
+        if match:
+            sectors.append(match.group(1).strip())
+            pcts.append(float(match.group(2)))
+    if sectors:
+        df = pd.DataFrame({"Sector": sectors, "Exposure (%)": pcts}).set_index("Sector")
+        st.bar_chart(df)
+
+
 def _render_trace(response_data: dict | None) -> None:
     """Show an expandable agent trace section if metadata is available."""
     if not response_data:
@@ -94,7 +110,10 @@ for msg in st.session_state.messages:
     with st.chat_message(role):
         st.markdown(msg["content"])
         if role == "assistant":
-            _render_trace(msg.get("response"))
+            resp = msg.get("response")
+            if resp and resp.get("tool_used") == "calculate_sector_exposure":
+                _render_exposure_chart(msg["content"])
+            _render_trace(resp)
 
 ### CHAT INPUT HANDLING
 
@@ -126,6 +145,8 @@ if question:
 
         st.markdown(answer)
         if response:
+            if response.tool_used == "calculate_sector_exposure":
+                _render_exposure_chart(answer)
             _render_trace(response.model_dump())
 
     st.session_state.messages.append({
