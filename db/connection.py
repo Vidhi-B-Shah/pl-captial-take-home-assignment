@@ -31,7 +31,9 @@ class DatabaseManager:
         """Return the shared SQLite connection, creating it if needed."""
         if self._connection is None:
             logger.info("Opening SQLite connection to %s", self._db_path)
-            self._connection = sqlite3.connect(str(self._db_path))
+            self._connection = sqlite3.connect(
+                str(self._db_path), check_same_thread=False
+            )
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys = ON")
         return self._connection
