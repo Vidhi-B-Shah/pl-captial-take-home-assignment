@@ -118,7 +118,7 @@ pl-capital/
 
 **Memory, context & fallback** : The agent maintains conversation context across turns and gracefully declines out of scope questions without hallucinating or calling tools unnecessarily.
 
-![Memory and Fallback](docs/screenshots/4_memory_chat_context_&_fallback_scenario.png)
+![Memory and Fallback](docs/screenshots/4_memory_chat_context_and_fallback_scenario.png)
 
 **Sector exposure with bar chart** : Exposure questions
 
