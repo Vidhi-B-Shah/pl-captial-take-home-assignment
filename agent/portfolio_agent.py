@@ -13,7 +13,7 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from agent.constants import AGENT_NAME, MODEL_NAME
-from agent.models import AgentResponse
+from agent.models import AgentResponse, ToolTrace
 from agent.prompts import ROOT_AGENT_SYSTEM_PROMPT
 from agent.tools.sql_tool import query_database
 from agent.tools.exposure_tool import calculate_sector_exposure
@@ -68,9 +68,9 @@ class AgentManager:
         )
 
         final_text = ""
-        tool_used = None
-        tool_input = None
-        tool_output = None
+        tool_traces: list[ToolTrace] = []
+        current_call_name: str | None = None
+        current_call_args: dict | None = None
 
         async for event in self._runner.run_async(
             user_id=user_id,
@@ -82,22 +82,29 @@ class AgentManager:
 
             for part in event.content.parts:
                 if part.function_call:
-                    tool_used = part.function_call.name
-                    tool_input = part.function_call.args
+                    current_call_name = part.function_call.name
+                    current_call_args = part.function_call.args
 
-                if part.function_response:
+                if part.function_response and current_call_name:
                     raw = part.function_response.response
-                    tool_output = str(raw) if raw else None
+                    generated_sql = (
+                        sql_tool._last_generated_sql
+                        if current_call_name == "query_database"
+                        else None
+                    )
+                    tool_traces.append(ToolTrace(
+                        tool_name=current_call_name,
+                        tool_input=current_call_args,
+                        tool_output=str(raw) if raw else None,
+                        sql_query=generated_sql,
+                    ))
+                    current_call_name = None
+                    current_call_args = None
 
                 if part.text and event.author == AGENT_NAME:
                     final_text = part.text
 
-        generated_sql = sql_tool._last_generated_sql if tool_used == "query_database" else None
-
         return AgentResponse(
             answer=final_text or "I was unable to process your request.",
-            tool_used=tool_used,
-            tool_input=tool_input,
-            tool_output=tool_output,
-            sql_query=generated_sql,
+            tool_traces=tool_traces,
         )

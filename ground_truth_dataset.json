@@ -115,6 +115,24 @@
         "expected_result_type": "sector_exposure_breakdown",
         "explanation": "Calculate sector exposures using portfolio ID as identifier, focusing only on equity holdings"
       }
+    },
+    {
+      "id": 11,
+      "type": "hybrid",
+      "question": "What are the sector exposures for the portfolio with the highest AUM?",
+      "ground_truth": {
+        "tools_used": ["query_database", "calculate_sector_exposure"],
+        "explanation": "First SQL to find highest AUM portfolio, then exposure calc"
+      }
+    },
+    {
+      "id": 12,
+      "type": "hybrid",
+      "question": "Show me sector exposures for all active portfolios",
+      "ground_truth": {
+        "tools_used": ["query_database", "calculate_sector_exposure"],
+        "explanation": "First SQL to get active portfolio names, then exposure calc for each"
+      }
     }
   ]
 }

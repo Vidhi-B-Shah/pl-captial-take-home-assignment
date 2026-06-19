@@ -206,6 +206,29 @@ def _evaluate_exposure(
     return True, f"Correct tool, {len(percentages)} sectors, sum={total:.1f}%"
 
 
+def _evaluate_hybrid(
+    question: dict[str, Any],
+    response: AgentResponse,
+) -> tuple[bool, str]:
+    """Verify that a hybrid question called all expected tools."""
+    expected_tools = set(question["ground_truth"]["tools_used"])
+    actual_tools = {t.tool_name for t in response.tool_traces}
+
+    missing = expected_tools - actual_tools
+    if missing:
+        return False, (
+            f"Missing tool calls: {missing}. "
+            f"Expected {expected_tools}, got {actual_tools}"
+        )
+
+    if "calculate_sector_exposure" in actual_tools:
+        percentages = re.findall(r"(\d+\.?\d*)\s*%", response.answer)
+        if not percentages:
+            return False, "Exposure tool was called but no percentages in response"
+
+    return True, f"All expected tools called: {actual_tools}"
+
+
 ### MAIN
 
 async def main() -> int:
@@ -224,7 +247,7 @@ async def main() -> int:
         qid = q["id"]
         qtype = q["type"]
         text = q["question"]
-        difficulty = q["difficulty"]
+        difficulty = q.get("difficulty", "n/a")
 
         logger.info("Evaluating Q%d (%s/%s): %s", qid, difficulty, qtype, text)
 
@@ -235,6 +258,8 @@ async def main() -> int:
                 passed, detail = _evaluate_text2sql(q, response, db)
             elif qtype == "exposure_calculator":
                 passed, detail = _evaluate_exposure(q, response)
+            elif qtype == "hybrid":
+                passed, detail = _evaluate_hybrid(q, response)
             else:
                 passed, detail = False, f"Unknown question type: {qtype}"
 

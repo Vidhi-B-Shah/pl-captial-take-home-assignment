@@ -89,20 +89,25 @@ def _render_trace(response_data: dict | None) -> None:
     """Show an expandable agent trace section if metadata is available."""
     if not response_data:
         return
-    tool = response_data.get("tool_used")
-    if not tool:
+    traces = response_data.get("tool_traces", [])
+    if not traces:
         return
     with st.expander("⚙️ Agent Trace"):
-        st.markdown(f"**Tool:** `{tool}`")
-        if response_data.get("sql_query"):
-            st.markdown("**Generated SQL:**")
-            st.code(response_data["sql_query"], language="sql")
-        if response_data.get("tool_input"):
-            st.markdown("**Tool Input:**")
-            st.json(response_data["tool_input"])
-        if response_data.get("tool_output"):
-            st.markdown("**Raw Output:**")
-            st.text(response_data["tool_output"])
+        for i, trace in enumerate(traces):
+            if len(traces) > 1:
+                st.markdown(f"### Step {i + 1}")
+            st.markdown(f"**Tool:** `{trace.get('tool_name')}`")
+            if trace.get("sql_query"):
+                st.markdown("**Generated SQL:**")
+                st.code(trace["sql_query"], language="sql")
+            if trace.get("tool_input"):
+                st.markdown("**Tool Input:**")
+                st.json(trace["tool_input"])
+            if trace.get("tool_output"):
+                st.markdown("**Raw Output:**")
+                st.text(trace["tool_output"])
+            if i < len(traces) - 1:
+                st.divider()
 
 
 for msg in st.session_state.messages:
@@ -111,7 +116,10 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
         if role == "assistant":
             resp = msg.get("response")
-            if resp and resp.get("tool_used") == "calculate_sector_exposure":
+            if resp and any(
+                t.get("tool_name") == "calculate_sector_exposure"
+                for t in resp.get("tool_traces", [])
+            ):
                 _render_exposure_chart(msg["content"])
             _render_trace(resp)
 
@@ -145,7 +153,10 @@ if question:
 
         st.markdown(answer)
         if response:
-            if response.tool_used == "calculate_sector_exposure":
+            if any(
+                t.tool_name == "calculate_sector_exposure"
+                for t in response.tool_traces
+            ):
                 _render_exposure_chart(answer)
             _render_trace(response.model_dump())
 
